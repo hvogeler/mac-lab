@@ -1,0 +1,31 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: mac-lab
+servers: 1
+agents: 2
+image: rancher/k3s:v1.35.4-k3s1
+ports:
+  - port: 8580:80
+    nodeFilters:
+      - loadbalancer
+  - port: 8543:443
+    nodeFilters:
+      - loadbalancer
+registries:
+  create:
+    name: mac-lab-registry
+    host: "0.0.0.0"
+    hostPort: "5001"
+options:
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+      - arg: --disable=servicelb
+        nodeFilters:
+          - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true
