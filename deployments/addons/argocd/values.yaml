@@ -1,6 +1,13 @@
 global:
   domain: argocd.localhost
 
+configs:
+  params:
+    server.insecure: true
+
 server:
   ingress:
-    enabled: false
+    enabled: true
+    ingressClassName: nginx
+    hostname: argocd.localhost
+    tls: true
