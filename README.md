@@ -65,4 +65,35 @@ kubectl port-forward svc/nginx 8000:80
 
 ---
 
-## Next steps
+## Stack
+
+| Component | Purpose |
+|---|---|
+| k3d | k3s in Docker — 1 server + 2 agent nodes |
+| MetalLB | LoadBalancer IPs from the Docker bridge subnet |
+| ingress-nginx | HTTP/HTTPS ingress |
+| ArgoCD | GitOps controller — watches this repo |
+| CloudNativePG | Postgres operator |
+
+## Bootstrapping a fresh cluster
+
+The Quick Start above creates the cluster and deploys the sample app only.
+To bring up the full GitOps stack see **[`specs/operation.md`](specs/operation.md)** — specifically the *Recreate from scratch* section.
+
+The one step that cannot come from Git is the Postgres admin secret. Create
+it before applying `root.yaml`:
+
+```bash
+kubectl create namespace postgres
+kubectl create secret generic postgres-admin-secret \
+  --from-literal=username=admin \
+  --from-literal=password=<your-password> \
+  -n postgres
+```
+
+Then apply the root ArgoCD application and let it converge:
+
+```bash
+kubectl apply -f deployments/argocd/apps/root.yaml
+kubectl -n argocd get applications -w
+```

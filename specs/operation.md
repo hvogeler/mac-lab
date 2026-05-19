@@ -98,7 +98,20 @@ helm install argocd argo/argo-cd \
 kubectl -n argocd rollout status deploy/argocd-server --timeout=5m
 ```
 
-**6. Apply the root Application to hand control to GitOps:**
+**6. Create the Postgres admin secret (not stored in Git):**
+
+```bash
+kubectl create namespace postgres
+kubectl create secret generic postgres-admin-secret \
+  --from-literal=username=admin \
+  --from-literal=password=<your-password> \
+  -n postgres
+```
+
+This must exist before ArgoCD syncs the `postgres-cluster` application,
+otherwise CNPG cannot complete the `initdb` bootstrap.
+
+**7. Apply the root Application to hand control to GitOps:**
 
 ```bash
 kubectl apply -f deployments/argocd/apps/root.yaml
@@ -106,9 +119,10 @@ kubectl apply -f deployments/argocd/apps/root.yaml
 
 From this point onward, ArgoCD watches `deployments/argocd/apps/` in the
 repo and reconciles everything else: `argocd-self`, `metallb`,
-`metallb-config`, `ingress-nginx`, and any future apps.
+`metallb-config`, `ingress-nginx`, `cloudnativepg`, `postgres-cluster`,
+and any future apps.
 
-**7. Watch the cascade:**
+**8. Watch the cascade:**
 
 ```bash
 kubectl -n argocd get applications -w
@@ -117,12 +131,14 @@ kubectl -n argocd get applications -w
 Wait until all of these report `Synced / Healthy`:
 
 - `root`
-- `argocd`         (ArgoCD adopting its own Helm release)
-- `metallb`        (chart)
-- `metallb-config` (IPAddressPool + L2Advertisement — may retry once or twice while CRDs land)
-- `ingress-nginx`  (DaemonSet pod per node on hostPort 80/443)
+- `argocd`           (ArgoCD adopting its own Helm release)
+- `metallb`          (chart)
+- `metallb-config`   (IPAddressPool + L2Advertisement — may retry once or twice while CRDs land)
+- `ingress-nginx`    (DaemonSet pod per node on hostPort 80/443)
+- `cloudnativepg`    (CNPG operator in `cnpg-system`)
+- `postgres-cluster` (Postgres pod in `postgres` — comes up after CNPG operator is ready)
 
-**8. Get the new admin password and reach the UI:**
+**9. Get the new admin password and reach the UI:**
 
 ```bash
 kubectl -n argocd get secret argocd-initial-admin-secret \
@@ -132,8 +148,24 @@ kubectl -n argocd get secret argocd-initial-admin-secret \
 Browse to `https://argocd.localhost:8543`. The admin password regenerates
 on every recreate; any previous password you remembered is gone.
 
+### Connecting to Postgres from macOS
+
+Once the cluster is running, connect directly on `localhost:5432`:
+
+```bash
+psql -h localhost -p 5432 -U admin -d labdb
+```
+
+The path is: `macOS localhost:5432 → k3d serverlb → ingress-nginx TCP passthrough → Postgres`
+
+This relies on the `5432:5432` port mapping in `k3d-config.yaml` and the
+`tcp-services` ConfigMap in `deployments/addons/ingress-nginx/`. Both are
+applied automatically on cluster create and ArgoCD sync — no manual steps needed.
+
 ### What does *not* come back automatically
 
+- **Postgres admin secret** — recreate it manually (see step 6 above).
+  Without it the `postgres-cluster` application will stall on `initdb`.
 - **Locally-built images** in the registry — push them again
   (`docker push localhost:5001/<name>:<tag>`).
 - **Any one-off `kubectl apply` you did outside Git** — by design.
@@ -190,6 +222,11 @@ kubectl get ingressclass               # 'nginx' should be (default)
 
 # Local registry
 curl -s http://localhost:5001/v2/_catalog
+
+# CloudNativePG
+kubectl -n cnpg-system get pods
+kubectl -n postgres get cluster
+kubectl -n postgres get pods
 ```
 
 ## Force ArgoCD to re-poll Git
