@@ -17,5 +17,5 @@ controller:
   config:
     use-forwarded-headers: "true"
 
-  extraArgs:
-    tcp-services-configmap: ingress-nginx/tcp-services
+tcp:
+  "5432": "postgres/mac-lab-db-rw:5432"
