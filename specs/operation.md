@@ -158,9 +158,15 @@ psql -h localhost -p 5432 -U admin -d labdb
 
 The path is: `macOS localhost:5432 → k3d serverlb → ingress-nginx TCP passthrough → Postgres`
 
-This relies on the `5432:5432` port mapping in `k3d-config.yaml` and the
-`tcp-services` ConfigMap in `deployments/addons/ingress-nginx/`. Both are
-applied automatically on cluster create and ArgoCD sync — no manual steps needed.
+This relies on the `5432:5432` port mapping in `k3d-config.yaml` and the `tcp:`
+entry in `deployments/addons/ingress-nginx/values.yaml`. Both are baked into the
+cluster config and ArgoCD sync — no manual steps needed.
+
+Connect with harlequin:
+
+```bash
+harlequin -a postgres "postgresql://admin:<password>@localhost:5432/labdb"
+```
 
 ### What does *not* come back automatically
 
@@ -250,6 +256,7 @@ kubectl -n argocd annotate application <name> \
 - **Host port mappings** from `cluster/k3d-config.yaml`:
   - `8580 → 80` (HTTP into ingress-nginx via k3d serverlb)
   - `8543 → 443` (HTTPS into ingress-nginx via k3d serverlb)
+  - `5432 → 5432` (Postgres via ingress-nginx TCP passthrough)
   - `5001 → 5000` (local registry on `localhost:5001`)
 - **DNS for `*.localhost`** is handled by macOS mDNSResponder, no
   `/etc/hosts` entry needed. If a host stops resolving, add:
@@ -266,3 +273,5 @@ kubectl -n argocd annotate application <name> \
 | Application stuck `OutOfSync` | Hard refresh (see above); then `kubectl -n argocd get app <name> -o yaml | grep -A10 status:` |
 | `metallb-config` failing with "no matches for kind IPAddressPool" | Wait for MetalLB chart to install CRDs; the retry block will catch up |
 | Pods in `ImagePullBackOff` from `localhost:5001/...` | Confirm `curl http://localhost:5001/v2/_catalog` lists the image |
+| `postgres-cluster` stuck `OutOfSync / Missing` | Check secret exists: `kubectl -n postgres get secret postgres-admin-secret` — recreate if missing (step 6) |
+| `localhost:5432` connection refused | Check `docker ps` for `0.0.0.0:5432->5432/tcp`; check `kubectl -n ingress-nginx get configmap ingress-nginx-tcp` |
