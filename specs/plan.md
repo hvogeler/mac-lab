@@ -1,114 +1,175 @@
-# Plan the playground cluster
+# mac_lab — VM-based k3s cluster (Multipass + OpenTofu) — Plan & Tracker
 
-## Nodes
+> **Living document.** This is the running plan for `mac_lab`. We plan here first, then
+> build, then tick items off. Update the Build Progress table and Findings as we go.
+> Convert relative dates to absolute when noting completion.
 
-This cluster has 3 nodes:
+## Context
 
-1. One control node
-2. Two agent nodes
+`mac_lab` is being repurposed from its original **k3d (k3s-in-Docker)** design to a
+**Docker-free, VM-based** Kubernetes lab on a **MacBook Pro M5, 64 GB**. Nodes are real
+Ubuntu VMs (Apple Virtualization.framework via **Multipass**), not containers. The cluster
+is **k3s**: 1 control plane + 2 workers.
 
-## Basic services
+This deliberately mirrors the patterns proven in the sibling project
+`~/Projects/k8s_homelab` (Talos/Proxmox), adapted to a laptop:
 
-Instead of the default traefik ingress it shoud have ingress-nginx deployed.
-Instead of the default serviceLB it should metallb deployed
-It should have a registry:2 deployed so we can keep images locally
-It should have ArgoCD deployed and activated. All cluster configuration should use a gitops workflow.
+- **OpenTofu owns the cluster + the one component GitOps can't manage itself (ArgoCD).**
+  In k8s_homelab, tofu owns the Cilium CNI bootstrap + the ArgoCD `helm_release`
+  ("who manages the manager?"), and ArgoCD owns everything under `apps/`. We replicate
+  that boundary here.
+- **Everything else is GitOps.** MetalLB, ingress-nginx, the local registry, CNPG, etc. are
+  ArgoCD-managed Applications, not tofu.
 
-## Order
+### Why Multipass + k3s (not k3d, not Lima)
 
-After creating the cluster first create the ArgoCD deployment and let us create the github project for ArgoCD to use.
-
-## Process
-
-Please never execute any commands that manipulate the cluster. Always tell me what to do and i will do it manually to learn.
+- **No Docker** — the explicit goal. Multipass runs lightweight Ubuntu VMs on the native
+  macOS hypervisor; 64 GB gives huge headroom.
+- **k3s** is purpose-built for "1 server + N agents on small VMs"; single binary, built-in
+  containerd + flannel CNI, trivial token join. Our manifests/Helm charts carry over from
+  the k3d design unchanged (k3d was already k3s, minus Docker).
+- **Multipass over Lima** specifically for **MetalLB**: Multipass puts VMs on a shared NAT
+  network (typically `192.168.64.0/24`) that the **host can reach directly**, so MetalLB
+  L2-mode LoadBalancer IPs are reachable from macOS with no extra setup. Lima needs
+  `socket_vmnet` to achieve the same.
 
 ---
 
-## Status (as of 2026-05-17)
+## Decisions locked
 
-Bootstrapped and working:
+| Topic | Decision |
+|---|---|
+| Host | MacBook Pro **M5, 64 GB** (arm64) |
+| Hypervisor | **Multipass** (Apple Virtualization.framework). No Docker. |
+| VM provisioning | **OpenTofu** with the **`larstobi/multipass`** provider (`~> 1.4`) + cloud-init |
+| K8s distro | **k3s** (built-in containerd + flannel) |
+| Topology | **1 control plane (`cp1`) + 2 workers (`w1`, `w2`)** |
+| Datastore | **Embedded etcd** (`--cluster-init`), so a control-plane node can be added later without re-init |
+| Disabled k3s built-ins | `traefik` (use ingress-nginx) + `servicelb` (use MetalLB) |
+| Node join | Pre-shared token via tofu `random_password` → passed to server (`K3S_TOKEN`) and agents. Removes the read-token-back dependency. |
+| Server IP → agents | `multipass_instance.cp1.ipv4` (provider exports it) templated into agent cloud-init |
+| LoadBalancer | **MetalLB** (L2), ArgoCD-managed. IP pool = a slice of the Multipass subnet outside its DHCP range — **TBD after first `multipass list`** |
+| Ingress | **ingress-nginx**, ArgoCD-managed |
+| GitOps engine | **ArgoCD**, bootstrapped by tofu `helm_release` (the ONE thing ArgoCD does not self-manage); app-of-apps owns the rest |
+| Postgres | **CloudNativePG** (carried from the k3d stack), ArgoCD-managed |
+| tofu state | `backend "local"` at a **fixed absolute path outside the repo** (`~/.local/state/mac_lab/terraform.tfstate`) so a checkout in any dir finds it. **Never committed** (holds token + kubeconfig key in plaintext). |
+| Manual ops | Per project rule: Claude authors files; the **operator runs all cluster-mutating commands** (`tofu apply`, `multipass`, `kubectl apply`, `helm`). |
 
-- [x] k3d cluster `mac-lab` (1 server + 2 agents, k3s v1.35.4)
-  - Built-in Traefik disabled
-  - Built-in servicelb disabled (replaced by MetalLB)
-  - Host ports `8580 → 80`, `8543 → 443` via k3d serverlb
-- [x] Local image registry `mac-lab-registry` on `localhost:5001` (k3d-managed)
-- [x] ArgoCD installed via Helm chart 9.5.14
-  - Self-managed via Application `argocd` (chart + values from this repo)
-  - App-of-apps `root` watches `deployments/argocd/apps/`
-  - Reachable at `https://argocd.localhost:8543` via ingress-nginx
-- [x] MetalLB Helm chart 0.15.3
-  - IP pool `172.19.255.200–250` (within the `k3d-mac-lab` Docker subnet `172.19.0.0/16`)
-- [x] ingress-nginx Helm chart 4.15.1
-  - DaemonSet with `hostPort: 80/443` so the k3d serverlb routes into it directly
-  - Marked as the cluster's default `IngressClass`
+### Tentative VM sizing (64 GB host — adjust freely)
 
-Repository layout in use:
+| Node | Role | vCPU | RAM | Disk |
+|---|---|---|---|---|
+| `cp1` | k3s server (control plane, etcd) | 2 | 4 GiB | 20 GiB |
+| `w1` | k3s agent | 2 | 6 GiB | 20 GiB |
+| `w2` | k3s agent | 2 | 6 GiB | 20 GiB |
+
+~16 GB committed; macOS + tooling keep the rest. Ubuntu image: **24.04 LTS**.
+
+---
+
+## Target architecture
 
 ```
-deployments/
-├── addons/        # Helm values (and any chart-supplemental CRs) per addon
-├── apps/          # workload manifests
-└── argocd/apps/   # ArgoCD Application definitions — root watches this dir
+  macOS host (arm64, M5)                          Multipass NAT net (e.g. 192.168.64.0/24,
+  - tofu / kubectl / helm                          host reaches VMs directly)
+  - ~/.kube/mac_lab kubeconfig          ┌──────────────────────────────────────────────┐
+        │                               │  cp1  k3s server --cluster-init (etcd)         │
+        │  tofu apply ─────────────────▶│       --disable traefik,servicelb              │
+        │                               │  w1   k3s agent ─┐                             │
+        │                               │  w2   k3s agent ─┴─ join via shared token      │
+        │                               │                                                │
+        │  helm_release.argocd (tofu) ─▶│  argocd ns  (ClusterIP; port-forward at first) │
+        │                               └──────────────────────────────────────────────┘
+        │  kubectl apply -f apps/root.yaml (manual seed)
+        ▼
+   ArgoCD app-of-apps owns:  metallb → ingress-nginx → registry → cnpg → workloads
 ```
 
-## Next moves (pick up here tomorrow)
+**Bootstrap order**
 
-### 0. Explain the deployments of metallb and ingress-nginx in detail
+1. `tofu apply` → `random_password.k3s_token` → `cp1` (server) → `w1`,`w2` (agents) →
+   fetch kubeconfig to `~/.kube/mac_lab` → `helm_release.argocd` (ClusterIP).
+2. `kubectl apply -f apps/root.yaml` (manual, once) → ArgoCD reconciles MetalLB, then
+   ingress-nginx (gets an LB IP from MetalLB's pool), then the rest.
+3. ArgoCD reachable via `kubectl -n argocd port-forward svc/argocd-server 8080:80`
+   until ingress-nginx + MetalLB are up; then switch to an ingress host.
 
-### 1. cert-manager + locally-trusted CA
+> ArgoCD starts as **ClusterIP** on purpose — its ingress LB IP doesn't exist until
+> MetalLB + ingress-nginx are reconciled *by ArgoCD itself*. No chicken-and-egg.
 
-Goal: stop bypassing browser cert warnings on `argocd.localhost`.
+---
 
-- Install `cert-manager` Helm chart as an Argo Application under
-  `deployments/addons/cert-manager/`
-- Use `mkcert -install` on the Mac to add a local CA to the macOS keychain
-- Create a `ClusterIssuer` backed by that CA (load the mkcert root cert as a
-  Secret in `cert-manager` namespace)
-- Update the ArgoCD Ingress to reference a `Certificate` (or use the chart's
-  `tls.secretName` + cert-manager annotations) so it serves a cert signed by
-  the local CA
-- Verify: `https://argocd.localhost:8543` loads in Chrome with no warning
+## Proposed repo structure
 
-### 2. Sample nginx app via GitOps
+```
+mac_lab/
+├── README.md                 # rewrite: VM/k3s quick start (replaces k3d)
+├── specs/
+│   └── plan.md               # this file
+├── tofu/                     # OpenTofu: Multipass VMs + k3s + ArgoCD bootstrap
+│   ├── providers.tf          # multipass + helm + random + local + null; absolute-path local backend
+│   ├── variables.tf
+│   ├── terraform.tfvars      # node sizes, image, kubeconfig path
+│   ├── vms.tf                # random_password token + cp1 + w1/w2 + rendered cloud-init
+│   ├── kubeconfig.tf         # fetch /etc/rancher/k3s/k3s.yaml off cp1, rewrite 127.0.0.1→cp1 IP
+│   ├── argocd.tf             # helm_release argocd (copied/adapted from k8s_homelab)
+│   ├── outputs.tf            # node IPs, kubeconfig path, next-step hints
+│   └── cloud-init/
+│       ├── server.yaml.tftpl
+│       └── agent.yaml.tftpl
+└── apps/                     # [later] ArgoCD app-of-apps: metallb, ingress-nginx, registry, cnpg, ...
+    └── root.yaml
+```
 
-Goal: prove the end-to-end GitOps loop with a real workload, not just
-platform components.
+---
 
-- Wrap the existing `deployments/apps/nginx/deployment.yaml` in an Argo
-  Application at `deployments/argocd/apps/nginx.yaml`
-- Add an `Ingress` for the nginx Service on `nginx.localhost`
-- Verify: `curl https://nginx.localhost:8543` returns the nginx welcome page
-- Then: edit `replicas` in the manifest, push, watch ArgoCD reconcile
+## Build Progress
 
-### 3. Push and consume a local image
+| Step | Status | Completed |
+|---|---|---|
+| **0** — Plan (this doc) | 🔄 in progress | — |
+| **1** — Prereqs: `brew install multipass`; `mkdir -p ~/.local/state/mac_lab` | 🔲 | — |
+| **2** — Scaffold `tofu/` (providers, vms, cloud-init, kubeconfig, argocd, outputs) | 🔲 | — |
+| **3** — `tofu init` + `tofu plan` review | 🔲 | — |
+| **4** — `tofu apply` → 3 VMs up, k3s server + agents joined | 🔲 | — |
+| **5** — Verify: `kubectl --kubeconfig ~/.kube/mac_lab get nodes` → 3 Ready | 🔲 | — |
+| **6** — Confirm Multipass subnet; set MetalLB IP pool range | 🔲 | — |
+| **7** — ArgoCD up (tofu) + reachable via port-forward | 🔲 | — |
+| **8** — `apps/` app-of-apps: MetalLB → ingress-nginx | 🔲 | — |
+| **9** — Local registry (Helm/ArgoCD) | 🔲 | — |
+| **10** — CloudNativePG (Helm/ArgoCD) | 🔲 | — |
+| **11** — Sample workload end-to-end (ingress + LB IP reachable from host) | 🔲 | — |
 
-Goal: exercise the `mac-lab-registry` we set up in the k3d config.
+Legend: 🔲 planned · 🔄 in progress · ✅ done
 
-- Build a trivial image (e.g. a tiny Go or static-site container)
-- Tag and push to `localhost:5001/<name>:<tag>`
-- Reference it from a Deployment under `deployments/apps/`
-- Verify the pod pulls from `mac-lab-registry`, not Docker Hub
-- (Decide whether to use the registry for the nginx app above or a separate
-  hello-world)
+---
 
-## Possible later additions
+## Open items to confirm (non-blocking — default as noted)
 
-Not committed — capture ideas here as they come up.
+1. **MetalLB IP pool** — exact range on the Multipass subnet. *Default:* take ~10 IPs at the
+   top of the `/24`, outside Multipass's DHCP lease range. Confirm after VMs exist (Step 6).
+2. **ArgoCD chart version** — reuse k8s_homelab's pinned `argo-cd` chart (was `9.5.20`),
+   re-verify on ArtifactHub before pinning here.
+3. **Registry** — in-cluster registry (Helm chart) vs Multipass-host registry. *Default:* in-cluster.
+4. **kubeconfig merge** — keep a standalone `~/.kube/mac_lab` file (set `KUBECONFIG` /
+   `--kubeconfig`) vs merge a `mac-lab` context into `~/.kube/config`. *Default:* standalone file.
 
-- Prometheus + Grafana (kube-prometheus-stack) for observability
-- ExternalDNS or Coredns customizations for `*.localhost` host resolution
-- ApplicationSet experiments
-- NetworkPolicy basics
-- A stateful workload (Postgres, MinIO) to learn PVCs / local-path-provisioner
+---
 
-## Decisions log
+## Findings (surprises vs the plan)
 
-- 2026-05-17 — Use Helm charts (not raw manifests) for all addons. Reason:
-  closer to real-world distribution, easier to learn values files.
-- 2026-05-17 — argocd-server runs in `--insecure` (HTTP) behind ingress-nginx
-  TLS termination. Reason: ArgoCD docs recommend this over re-encrypt, gRPC
-  paths are more reliable.
-- 2026-05-17 — MetalLB installed even though not on the data path for
-  ingress-nginx (the k3d serverlb + DaemonSet hostPort handles that). Reason:
-  matches the plan; lets other Services experiment with `type: LoadBalancer`.
+_(empty — fill in as we build, like the k8s_homelab plan's findings section)_
+
+---
+
+## State recovery (break-glass)
+
+State is a fixed local file outside the repo, never in git. If it is lost, the running
+cluster can be re-imported rather than rebuilt:
+
+- `tofu import multipass_instance.cp1 cp1` (and `w1`, `w2`)
+- `tofu import helm_release.argocd argocd/argocd`
+- `tofu import random_password.k3s_token <token>` — the token is readable on the server at
+  `/var/lib/rancher/k3s/server/token`.
+
+Easier than relying on this: keep an occasional backup copy of the tiny state file.
