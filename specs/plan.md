@@ -4,26 +4,67 @@
 > build, then tick items off. Update the Build Progress table and Findings as we go.
 > Convert relative dates to absolute when noting completion.
 
-## ⏯️ Resume here (status as of 2026-06-28)
+## ⏯️ Resume here (paused evening 2026-06-28)
 
-Cluster is **up and verified** (Steps 0–7 ✅): 3 nodes Ready (k3s v1.36.2, Ubuntu 26.04
-arm64), ArgoCD running (app v3.4.4). Multipass subnet `192.168.252.0/24`; MetalLB pool
-chosen `192.168.252.240-250`.
+### TL;DR to say tomorrow morning
+> "Good morning — resume mac_lab. First explain the CoreDNS DNS issue to me simply (I didn't
+> get it last night), then let's discuss my 3 open questions BEFORE applying anything."
 
-The **`apps/` app-of-apps is scaffolded and `helm template`-validated** (Step 8 🔄):
-`apps/root.yaml` (infra ApplicationSet → SSH remote), `apps/infra/metallb-system/` (umbrella
-chart, L2-only, pool CRs on sync-wave 1), `apps/infra/ingress-nginx/` (umbrella chart,
-LB IP pinned to `.240`).
+**Do NOT apply anything on resume until we've discussed the 3 questions below.** The CoreDNS
+fix is staged in `bootstrap/coredns-custom.yaml` but has NOT been applied.
 
-**Next action (operator-run): bring up GitOps —**
-1. Register a read-only ArgoCD repo credential (SSH deploy key) for
-   `ssh://git@git.home.vogeler.cc/hvo/mac_lab.git`.
-2. `git add apps/ && commit && push` (the ApplicationSet reads from the remote, not local).
-3. `kubectl --kubeconfig ~/.kube/mac_lab apply -f apps/root.yaml` (one-time seed).
-4. Watch `infra-metallb-system` then `infra-ingress-nginx` go Synced/Healthy.
-5. Verify: `kubectl -n ingress-nginx get svc` → EXTERNAL-IP `192.168.252.240`; curl it from macOS.
+### Where we are
+- Cluster **up and verified** (Steps 0–7 ✅): 3 nodes Ready (k3s v1.36.2, Ubuntu 26.04 arm64),
+  ArgoCD running (app v3.4.4). Subnet `192.168.252.0/24`; MetalLB pool `192.168.252.240-250`.
+- `apps/` scaffolded + `helm template`-validated: `apps/root.yaml` now has **two** ApplicationSets
+  (`infra` + `platform`), `apps/infra/metallb-system/`, `apps/infra/ingress-nginx/`.
+- `root.yaml` **already applied** to the cluster; both ApplicationSets exist.
+- Repo credential **already done**: deploy key generated in gitignored `secrets/`, public key
+  added as a read-only Forgejo deploy key, `repo-mac-lab` repository Secret applied to argocd ns.
 
-Then Steps 9–11: local registry, CloudNativePG, sample workload end-to-end.
+### THE CURRENT BLOCKER (Step 8 🔄)
+The ApplicationSets generate **zero** Applications because in-cluster DNS (CoreDNS) cannot
+resolve `git.home.vogeler.cc`. See the Findings entry "In-cluster DNS can't resolve internal
+homelab zones". The node resolves it; CoreDNS forwards to an upstream that only knows public
+names → NXDOMAIN. Fix is staged but unapplied: `bootstrap/coredns-custom.yaml`.
+
+### Pending apply steps (ONLY after we agree the approach)
+```bash
+export KUBECONFIG=~/.kube/mac_lab
+kubectl apply -f bootstrap/coredns-custom.yaml
+kubectl -n kube-system rollout restart deploy coredns
+kubectl -n kube-system rollout status deploy coredns
+kubectl -n argocd exec deploy/argocd-repo-server -- nslookup git.home.vogeler.cc   # expect 192.168.4.60
+kubectl -n argocd rollout restart deploy argocd-applicationset-controller
+kubectl -n argocd get applications      # expect infra-metallb-system, infra-ingress-nginx to appear & sync
+```
+Then verify ingress LB: `kubectl -n ingress-nginx get svc` → EXTERNAL-IP `192.168.252.240`,
+`curl -I http://192.168.252.240` (nginx 404). Then Steps 9–11 (registry, CNPG, sample app).
+
+### 🗣️ 3 open questions to DISCUSS FIRST on resume (then implement what we decide)
+1. **Re-explain CoreDNS simply.** User didn't follow the DNS explanation when tired. Start here,
+   plain-language, before anything else.
+2. **Zero-manual-step rebuild (user's core expectation).** Goal: `wipe whole cluster → recreate
+   entirely from the mac_lab repo with NO manual steps in between`. User is worried about all the
+   one-off "bootstrap" kubectl applies (repo cred, coredns-custom, ArgoCD). My take to present:
+   this IS achievable — the fix is to make **tofu** the single reproducible bootstrapper (it
+   already is for VMs+k3s+ArgoCD; fold in the coredns ConfigMap via the `hashicorp/kubernetes`
+   provider, and inject the repo credential into the ArgoCD `helm_release` values from the
+   local key file). "tofu apply" is not a manual step in the worrying sense — it's the
+   reproducible entrypoint. Only truly un-GitOps-able thing is the very first private key, which
+   tofu reads from a local (uncommitted) file. End state: `tofu destroy && tofu apply` rebuilds
+   everything, ArgoCD pulls the rest. See also the earlier sealed-secrets discussion.
+3. **Cilium instead of flannel + MetalLB (like the Talos homelab)?** Yes, possible: install k3s
+   with `--flannel-backend=none --disable-network-policy --disable=servicelb`, then install
+   Cilium (kube-proxy replacement + LB-IPAM + L2 announcements + Hubble), CNI bootstrapped by
+   tofu (nodes stay NotReady until CNI is up — same as homelab). Trade-off: one unified layer +
+   consistency with homelab + better observability, vs. more complex bootstrap. flannel+MetalLB
+   is simpler and already working. NOTE: this is orthogonal to the CoreDNS fix (DNS issue exists
+   either way). Decide alongside Q2 since both reshape the k3s install / tofu bootstrap.
+
+> **Bootstrap secret note (still relevant):** the ArgoCD repo Secret uses
+> `insecureIgnoreHostKey: "true"` (fine on a trusted LAN); harden later via
+> `argocd-ssh-known-hosts-cm` (`multipass exec cp1 -- ssh-keyscan git.home.vogeler.cc`).
 
 ## Context
 
@@ -196,6 +237,15 @@ Legend: 🔲 planned · 🔄 in progress · ✅ done
 - **ArgoCD chart** — repo `argoproj/argo-helm`, chart `argo-cd`. Latest is `10.0.0` but it's
   a major CHART bump (likely breaking values) with the SAME app v3.4.4 as `9.7.1`; pinned
   `9.7.1`.
+- **In-cluster DNS can't resolve internal homelab zones (2026-06-28).** k3s CoreDNS
+  (`forward . /etc/resolv.conf`) forwards to an upstream that only knows PUBLIC names, so pods
+  get NXDOMAIN for `git.home.vogeler.cc` (and any `*.home.vogeler.cc`/`hvo.lan`/`infra.vogeler.cc`).
+  The NODE resolves them fine via its real uplink `192.168.252.1` (Multipass bridge). Symptom:
+  ApplicationSets generated zero apps — `failed to list refs: ... lookup git.home.vogeler.cc ...
+  no such host`. NOT an auth problem (repo cred was fine). Fix = `bootstrap/coredns-custom.yaml`
+  (coredns-custom ConfigMap forwarding the 3 internal zones to `192.168.252.1`) + restart
+  coredns. Bootstrap concern — must precede ArgoCD pulling the repo, so applied out-of-band;
+  TODO: fold into tofu (`hashicorp/kubernetes` provider) for reproducibility.
 
 ---
 

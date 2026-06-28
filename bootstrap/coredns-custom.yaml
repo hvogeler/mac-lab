@@ -1,0 +1,37 @@
+# CoreDNS custom config — resolve the internal homelab zones from inside the cluster.
+#
+# WHY (bootstrap concern, applied out-of-band):
+# k3s CoreDNS forwards unknown names to an upstream that only knows PUBLIC names, so pods get
+# NXDOMAIN for split-horizon LAN names like git.home.vogeler.cc (which the NODE resolves fine
+# via its real uplink 192.168.252.1, the Multipass host bridge). Without this, ArgoCD's
+# repo-server / applicationset-controller can't even look up the git host:
+#   "failed to list refs: dial tcp: lookup git.home.vogeler.cc on 10.43.0.10:53: no such host"
+#
+# This must exist BEFORE ArgoCD can pull the repo, so it can't be GitOps-managed by that repo
+# (chicken-and-egg) — apply it out-of-band, same category as the repo credential:
+#   kubectl --kubeconfig ~/.kube/mac_lab apply -f bootstrap/coredns-custom.yaml
+#   kubectl --kubeconfig ~/.kube/mac_lab -n kube-system rollout restart deploy coredns
+#
+# k3s mounts this ConfigMap at /etc/coredns/custom/ and the Corefile does
+# `import /etc/coredns/custom/*.server`, so each *.server key becomes extra CoreDNS server
+# blocks. We forward the internal zones to the node's real DNS uplink (192.168.252.1), which
+# resolves both public and internal names. Public names keep using the default `.` forward.
+#
+# NOTE: 192.168.252.1 is the Multipass bridge gateway for the 192.168.252.0/24 network. If that
+# subnet ever changes (VM network recreated), update the forward target here. See specs/plan.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  internal-zones.server: |
+    home.vogeler.cc:53 {
+        forward . 192.168.252.1
+    }
+    hvo.lan:53 {
+        forward . 192.168.252.1
+    }
+    infra.vogeler.cc:53 {
+        forward . 192.168.252.1
+    }

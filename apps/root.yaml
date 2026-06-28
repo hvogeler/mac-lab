@@ -53,3 +53,40 @@ spec:
         syncOptions:
           - CreateNamespace=true
           - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: ssh://git@git.home.vogeler.cc/hvo/mac_lab.git
+        revision: main
+        directories:
+          - path: apps/platform/*
+  template:
+    metadata:
+      name: "platform-{{.path.basename}}"
+      labels:
+        mac-lab.tier: platform
+    spec:
+      project: default
+      source:
+        repoURL: ssh://git@git.home.vogeler.cc/hvo/mac_lab.git
+        targetRevision: main
+        path: "{{.path.path}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.path.basename}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+
