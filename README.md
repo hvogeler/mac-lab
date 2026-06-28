@@ -1,4 +1,5 @@
 # mac_lab — k3d learning cluster
+# to be replaced
 
 A local Kubernetes playground built on [k3d](https://k3d.io) (k3s in Docker) for
 experimenting with cluster operations, addons, and application deployments.
