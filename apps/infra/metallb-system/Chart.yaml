@@ -1,0 +1,16 @@
+# Umbrella chart: wraps the upstream metallb chart so its values live in Git next to it and
+# ArgoCD renders it as a single Helm source. ArgoCD's repo-server runs `helm dependency build`
+# automatically. The directory name (metallb-system) == the target namespace.
+#
+# Chart 0.16.1 -> MetalLB v0.16.1 (verified against the repo 2026-06-28). Re-check before a bump:
+#   helm repo add metallb https://metallb.github.io/metallb && helm repo update
+#   helm search repo metallb/metallb --versions | head
+apiVersion: v2
+name: metallb-system
+description: MetalLB load-balancer (L2 mode), GitOps-managed via ArgoCD
+type: application
+version: 0.0.0
+dependencies:
+  - name: metallb
+    version: 0.16.1
+    repository: https://metallb.github.io/metallb

@@ -4,3 +4,7 @@
 # ignore any copy that lands here.
 kubeconfig
 *.kubeconfig
+
+# Helm dependency artifacts — ArgoCD's repo-server builds these itself; never commit.
+apps/**/charts/
+apps/**/Chart.lock

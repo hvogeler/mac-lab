@@ -1,0 +1,17 @@
+# Umbrella chart: upstream ingress-nginx, fronted by a MetalLB LoadBalancer IP (see values).
+#
+# NOTE: the kubernetes/ingress-nginx project is reportedly archiving/retiring (~2026). Fine for
+# a lab; revisit (e.g. Gateway API) before relying on upstream security patches long-term.
+#
+# Chart 4.15.1 -> controller v1.15.1 (verified against the repo 2026-06-28). Re-check before a bump:
+#   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && helm repo update
+#   helm search repo ingress-nginx/ingress-nginx --versions | head
+apiVersion: v2
+name: ingress-nginx
+description: ingress-nginx controller (GitOps via ArgoCD), fronted by a MetalLB LB IP
+type: application
+version: 0.0.0
+dependencies:
+  - name: ingress-nginx
+    version: 4.15.1
+    repository: https://kubernetes.github.io/ingress-nginx

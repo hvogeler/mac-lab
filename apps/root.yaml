@@ -1,0 +1,55 @@
+# Root "app-of-apps" — the single bootstrap seed you kubectl-apply ONCE into the argocd
+# namespace. After that, ArgoCD owns everything under apps/ and you never kubectl-apply again.
+#
+#   kubectl --kubeconfig ~/.kube/mac_lab apply -f apps/root.yaml
+#
+# One ApplicationSet, a git *directory* generator: every subdirectory under apps/infra/
+# becomes one ArgoCD Application automatically. Drop a new component dir in, commit, push,
+# and it appears — no edits here. (Add a second `platform` ApplicationSet later, exactly like
+# k8s_homelab, when there are workloads to run.)
+#
+# CONVENTION: the directory basename == the target namespace (CreateNamespace=true). Name each
+# component dir after the namespace it should live in (metallb-system, ingress-nginx, ...).
+# The cluster itself and ArgoCD are owned by tofu and deliberately NOT here.
+#
+# REPO ACCESS: this is a private repo. Register a read-only credential in ArgoCD ONCE before
+# applying this seed (the repo-server clones over SSH). Either:
+#   argocd repo add ssh://git@git.home.vogeler.cc/hvo/mac_lab.git --ssh-private-key-path <deploy_key>
+# or add a repository Secret (label argocd.argoproj.io/secret-type=repository) to the argocd ns.
+# cp1 already confirmed it can reach git.home.vogeler.cc:22.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: infra
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: ssh://git@git.home.vogeler.cc/hvo/mac_lab.git
+        revision: main
+        directories:
+          - path: apps/infra/*
+  template:
+    metadata:
+      name: "infra-{{.path.basename}}"
+      labels:
+        mac-lab.tier: infra
+    spec:
+      project: default
+      source:
+        repoURL: ssh://git@git.home.vogeler.cc/hvo/mac_lab.git
+        targetRevision: main
+        path: "{{.path.path}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.path.basename}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

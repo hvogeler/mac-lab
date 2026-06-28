@@ -4,6 +4,27 @@
 > build, then tick items off. Update the Build Progress table and Findings as we go.
 > Convert relative dates to absolute when noting completion.
 
+## ⏯️ Resume here (status as of 2026-06-28)
+
+Cluster is **up and verified** (Steps 0–7 ✅): 3 nodes Ready (k3s v1.36.2, Ubuntu 26.04
+arm64), ArgoCD running (app v3.4.4). Multipass subnet `192.168.252.0/24`; MetalLB pool
+chosen `192.168.252.240-250`.
+
+The **`apps/` app-of-apps is scaffolded and `helm template`-validated** (Step 8 🔄):
+`apps/root.yaml` (infra ApplicationSet → SSH remote), `apps/infra/metallb-system/` (umbrella
+chart, L2-only, pool CRs on sync-wave 1), `apps/infra/ingress-nginx/` (umbrella chart,
+LB IP pinned to `.240`).
+
+**Next action (operator-run): bring up GitOps —**
+1. Register a read-only ArgoCD repo credential (SSH deploy key) for
+   `ssh://git@git.home.vogeler.cc/hvo/mac_lab.git`.
+2. `git add apps/ && commit && push` (the ApplicationSet reads from the remote, not local).
+3. `kubectl --kubeconfig ~/.kube/mac_lab apply -f apps/root.yaml` (one-time seed).
+4. Watch `infra-metallb-system` then `infra-ingress-nginx` go Synced/Healthy.
+5. Verify: `kubectl -n ingress-nginx get svc` → EXTERNAL-IP `192.168.252.240`; curl it from macOS.
+
+Then Steps 9–11: local registry, CloudNativePG, sample workload end-to-end.
+
 ## Context
 
 `mac_lab` is being repurposed from its original **k3d (k3s-in-Docker)** design to a
@@ -128,14 +149,14 @@ mac_lab/
 | Step | Status | Completed |
 |---|---|---|
 | **0** — Plan (this doc) | ✅ | 2026-06-28 |
-| **1** — Prereqs: `brew install multipass`; `mkdir -p ~/.local/state/mac_lab` | 🔲 | — |
+| **1** — Prereqs: `brew install multipass`; `mkdir -p ~/.local/state/mac_lab` | ✅ | 2026-06-28 (multipass 1.16.3; init/plan ok) |
 | **2** — Scaffold `tofu/` (providers, vms, cloud-init, kubeconfig, argocd, outputs) | ✅ | 2026-06-28 (fmt + `validate` pass; providers resolve) |
-| **3** — `tofu init` + `tofu plan` review | 🔲 | — |
-| **4** — `tofu apply` → 3 VMs up, k3s server + agents joined | 🔲 | — |
-| **5** — Verify: `kubectl --kubeconfig ~/.kube/mac_lab get nodes` → 3 Ready | 🔲 | — |
-| **6** — Confirm Multipass subnet; set MetalLB IP pool range | 🔲 | — |
-| **7** — ArgoCD up (tofu) + reachable via port-forward | 🔲 | — |
-| **8** — `apps/` app-of-apps: MetalLB → ingress-nginx | 🔲 | — |
+| **3** — `tofu init` + `tofu plan` review | ✅ | 2026-06-28 (plan reviewed, clean) |
+| **4** — `tofu apply` → 3 VMs up, k3s server + agents joined | ✅ | 2026-06-28 (9 resources; launch blocked on cloud-init as hoped) |
+| **5** — Verify: `kubectl --kubeconfig ~/.kube/mac_lab get nodes` → 3 Ready | ✅ | 2026-06-28 (k3s v1.36.2, Ubuntu 26.04 arm64) |
+| **6** — Confirm Multipass subnet; set MetalLB IP pool range | ✅ | 2026-06-28 (subnet 192.168.252.0/24; pool 192.168.252.240-250) |
+| **7** — ArgoCD up (tofu) + reachable via port-forward | ✅ | 2026-06-28 (7 pods Running, app v3.4.4) |
+| **8** — `apps/` app-of-apps: MetalLB → ingress-nginx | 🔄 | 2026-06-28 files scaffolded + `helm template` validated; pending: register repo cred → push → seed |
 | **9** — Local registry (Helm/ArgoCD) | 🔲 | — |
 | **10** — CloudNativePG (Helm/ArgoCD) | 🔲 | — |
 | **11** — Sample workload end-to-end (ingress + LB IP reachable from host) | 🔲 | — |
@@ -146,8 +167,9 @@ Legend: 🔲 planned · 🔄 in progress · ✅ done
 
 ## Open items to confirm (non-blocking — default as noted)
 
-1. **MetalLB IP pool** — exact range on the Multipass subnet. *Default:* take ~10 IPs at the
-   top of the `/24`, outside Multipass's DHCP lease range. Confirm after VMs exist (Step 6).
+1. **MetalLB IP pool** — ✅ resolved 2026-06-28. Subnet `192.168.252.0/24` (host `.1` on
+   bridge100; VMs `.2`–`.4`). Pool = **`192.168.252.240-192.168.252.250`** (high slice, clear
+   of DHCP-allocated low addresses, reachable from macOS).
 2. **ArgoCD chart version** — ✅ pinned `9.7.1` (app v3.4.4), verified against the repo
    2026-06-28. Chart 10.0.0 exists (same app v3.4.4, major chart bump) — deferred.
 3. **Registry** — in-cluster registry (Helm chart) vs Multipass-host registry. *Default:* in-cluster.
@@ -158,7 +180,22 @@ Legend: 🔲 planned · 🔄 in progress · ✅ done
 
 ## Findings (surprises vs the plan)
 
-_(empty — fill in as we build, like the k8s_homelab plan's findings section)_
+- **`larstobi/multipass` resource exports `ipv4`** (read-only) — so agents reference
+  `multipass_instance.cp1.ipv4` directly for their join config and the kubeconfig rewrite;
+  no data source needed. Resource args: `name`, `image`, `cpus`, `memory` (string e.g.
+  `"4GiB"`), `disk`, `cloudinit_file`. Provider resolved to v1.4.3.
+- **tfvars vs variables.tf was redundant** — originally every sizing knob had a default in
+  `variables.tf` AND a value in `terraform.tfvars` (two-places-must-match drift). Fixed:
+  `variables.tf` declares type+description with **no defaults**; `terraform.tfvars` is the
+  single source of values. `argocd_version` is the one exception — a pinned constant living
+  only in `argocd.tf`.
+- **Ubuntu LTS choice** — use the current LTS, never interim releases. 26.04 LTS (Resolute
+  Raccoon, 2026-04-23) confirmed available in `multipass find` (alias `resolute`/`lts`).
+  Pinned the explicit `26.04`, not the `lts` alias, so it can't silently float to 28.04 and
+  trigger a surprise rebuild.
+- **ArgoCD chart** — repo `argoproj/argo-helm`, chart `argo-cd`. Latest is `10.0.0` but it's
+  a major CHART bump (likely breaking values) with the SAME app v3.4.4 as `9.7.1`; pinned
+  `9.7.1`.
 
 ---
 

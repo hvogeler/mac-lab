@@ -1,0 +1,33 @@
+{{- /*
+MetalLB L2 config. These CRs are validated by MetalLB's admission webhook, which only exists
+once the controller is up — so they carry sync-wave "1" to apply AFTER the chart's wave-0
+resources (controller/speaker/CRDs) are Healthy. Namespace is intentionally omitted so ArgoCD
+places them in this Application's destination namespace (metallb-system).
+
+Range mirrors specs/plan.md: a high slice of the Multipass subnet (192.168.252.0/24), clear of
+the DHCP-allocated low addresses (host .1, VMs .2-.4), reachable from macOS.
+
+ALLOCATION TABLE — keep in sync with LoadBalancer Services that pin an IP via the
+metallb.universe.tf/loadBalancerIPs annotation:
+  .240  ingress-nginx   infra/ingress-nginx (values.yaml)   ingress entrypoint
+  .241 - .250           FREE
+*/}}
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: mac-lab-pool
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  addresses:
+    - 192.168.252.240-192.168.252.250
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: mac-lab-l2
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  ipAddressPools:
+    - mac-lab-pool

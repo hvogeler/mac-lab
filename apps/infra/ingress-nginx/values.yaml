@@ -1,0 +1,22 @@
+ingress-nginx:
+  controller:
+    # Default IngressClass so Ingress resources with no explicit class land here.
+    ingressClassResource:
+      default: true
+
+    service:
+      type: LoadBalancer
+      annotations:
+        # Pin the first MetalLB pool IP so the ingress entrypoint is a stable target
+        # across restarts/re-syncs. Keep in sync with the allocation table in
+        # infra/metallb-system/templates/pool.yaml.
+        metallb.universe.tf/loadBalancerIPs: "192.168.252.240"
+
+    # Single replica is fine for a laptop lab.
+    replicaCount: 1
+
+    metrics:
+      enabled: false   # enable later with a monitoring stack
+
+    admissionWebhooks:
+      enabled: true

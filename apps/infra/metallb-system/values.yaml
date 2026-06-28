@@ -1,0 +1,10 @@
+metallb:
+  # L2 (ARP) mode is the default and all this lab needs — no BGP.
+  # Disable both BGP backends so MetalLB ships just the controller + speaker
+  # (frrk8s is enabled by default in chart 0.16.1 and is BGP-only — unused in L2).
+  speaker:
+    frr:
+      enabled: false
+  frrk8s:
+    enabled: false
+  # CRDs ship with the chart (default enabled); ArgoCD applies them before the CRs below.
