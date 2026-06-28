@@ -1,0 +1,6 @@
+.DS_Store
+
+# Kubeconfig is written to ~/.kube/mac_lab by default (outside the repo), but
+# ignore any copy that lands here.
+kubeconfig
+*.kubeconfig

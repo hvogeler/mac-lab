@@ -1,0 +1,10 @@
+#cloud-config
+# k3s control plane. Embedded etcd (--cluster-init) so a second control-plane
+# node could join later without re-init. Traefik + servicelb disabled: ingress
+# is ingress-nginx and LoadBalancer IPs come from MetalLB, both ArgoCD-managed.
+# The final loop blocks cloud-init until the API actually serves, so by the time
+# `multipass launch` returns the kubeconfig fetch and ArgoCD bootstrap are safe.
+package_update: true
+runcmd:
+  - curl -sfL https://get.k3s.io | K3S_TOKEN="${token}" INSTALL_K3S_EXEC="server --cluster-init --disable=traefik --disable=servicelb --write-kubeconfig-mode=644" sh -
+  - until k3s kubectl get nodes >/dev/null 2>&1; do sleep 3; done

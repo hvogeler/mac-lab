@@ -1,0 +1,13 @@
+# Rendered cloud-init (contains the k3s token) — regenerated on every apply.
+.rendered/
+
+# Provider plugins / local cache.
+.terraform/
+
+# Any state that ends up here (real state lives at an absolute path outside the repo).
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Commit .terraform.lock.hcl — it pins provider versions.

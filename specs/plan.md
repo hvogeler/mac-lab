@@ -127,9 +127,9 @@ mac_lab/
 
 | Step | Status | Completed |
 |---|---|---|
-| **0** — Plan (this doc) | 🔄 in progress | — |
+| **0** — Plan (this doc) | ✅ | 2026-06-28 |
 | **1** — Prereqs: `brew install multipass`; `mkdir -p ~/.local/state/mac_lab` | 🔲 | — |
-| **2** — Scaffold `tofu/` (providers, vms, cloud-init, kubeconfig, argocd, outputs) | 🔲 | — |
+| **2** — Scaffold `tofu/` (providers, vms, cloud-init, kubeconfig, argocd, outputs) | ✅ | 2026-06-28 (fmt + `validate` pass; providers resolve) |
 | **3** — `tofu init` + `tofu plan` review | 🔲 | — |
 | **4** — `tofu apply` → 3 VMs up, k3s server + agents joined | 🔲 | — |
 | **5** — Verify: `kubectl --kubeconfig ~/.kube/mac_lab get nodes` → 3 Ready | 🔲 | — |
@@ -148,8 +148,8 @@ Legend: 🔲 planned · 🔄 in progress · ✅ done
 
 1. **MetalLB IP pool** — exact range on the Multipass subnet. *Default:* take ~10 IPs at the
    top of the `/24`, outside Multipass's DHCP lease range. Confirm after VMs exist (Step 6).
-2. **ArgoCD chart version** — reuse k8s_homelab's pinned `argo-cd` chart (was `9.5.20`),
-   re-verify on ArtifactHub before pinning here.
+2. **ArgoCD chart version** — ✅ pinned `9.7.1` (app v3.4.4), verified against the repo
+   2026-06-28. Chart 10.0.0 exists (same app v3.4.4, major chart bump) — deferred.
 3. **Registry** — in-cluster registry (Helm chart) vs Multipass-host registry. *Default:* in-cluster.
 4. **kubeconfig merge** — keep a standalone `~/.kube/mac_lab` file (set `KUBECONFIG` /
    `--kubeconfig`) vs merge a `mac-lab` context into `~/.kube/config`. *Default:* standalone file.

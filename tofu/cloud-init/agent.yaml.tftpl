@@ -1,0 +1,7 @@
+#cloud-config
+# k3s agent (worker). Joins cp1 using the shared cluster token. The agent service
+# retries the connection on its own, so a brief race with the server coming up is
+# harmless.
+package_update: true
+runcmd:
+  - curl -sfL https://get.k3s.io | K3S_URL="https://${server_ip}:6443" K3S_TOKEN="${token}" sh -
